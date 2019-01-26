@@ -1,0 +1,14 @@
+{
+  "name": "graphdb",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js"
+  },
+  "author": "",
+  "dependencies": {
+    "level": "^4.0.0"
+  }
+}
