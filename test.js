@@ -5,28 +5,64 @@ async function main()
 {
 	const db = new GraphDB("./.db")
 	const teamHF = await db.create({ name: "Happy Farmers" })
-	console.log(await db.getNode(teamHF))
+	console.log()
+	console.log(teamHF + " = ")
+	console.log(await db.get(teamHF))
 	
 	await db.set(teamHF, { name: "Happy Fellows" })
-	console.log(await db.getNode(teamHF))
+	console.log()
+	console.log(teamHF + " = ")
+	console.log(await db.get(teamHF))
 	
 	const playerA = await db.create({ name: "Alvin" })
-	console.log(await db.getNode(playerA))
+	console.log()
+	console.log(playerA + " = ")
+	console.log(await db.get(playerA))
 	
 	const playerB = await db.create({ name: "Betty" })
-	console.log(await db.getNode(playerB))
+	console.log()
+	console.log(playerB + " = ")
+	console.log(await db.get(playerB))
 	
 	await db.link(teamHF, "roster", playerA)
 	await db.link(teamHF, "roster", playerB)
-	console.log(await db.getNode(teamHF))
-	console.log(await db.getNode(playerA))
-	console.log(await db.getNode(playerB))
+	console.log()
+	console.log(teamHF + ".linkKinds = ")
+	console.log(await db.getLinkKindsFrom(teamHF))
 	
+	console.log()
+	console.log(teamHF + ".>roster = ")
+	console.log(await db.getLinksFrom(teamHF, "roster"))
+	
+	console.log()
+	console.log(playerA + ".<roster = ")
+	console.log(await db.getLinksTo(playerA, "roster"))
+	
+	console.log()
+	console.log(playerB + ".<roster = ")
+	console.log(await db.getLinksTo(playerB, "roster"))
+	
+	console.log()
+	console.log("del " + playerA)
+	await db.del(playerA)
+	
+	console.log()
+	console.log(teamHF + ".>roster = ")
+	console.log(await db.getLinksFrom(teamHF, "roster"))
+	
+	console.log()
+	console.log(playerA + " = ")
+	console.log(await db.get(playerA))
+	
+	console.log()
+	console.log("del " + teamHF)
 	await db.del(teamHF)
-	console.log(await db.getNode(teamHF))
-	console.log(await db.getNode(playerA))
-	console.log(await db.getNode(playerB))
 	
+	console.log()
+	console.log(playerB + ".<roster = ")
+	console.log(await db.getLinksTo(playerB, "roster"))
+	
+	/*
 	const root = await db.set(".root", {})
 	
 	console.log("")
@@ -69,7 +105,7 @@ async function main()
 	console.log("")
 	console.log(await db.getNode(players[1]))
 	console.log("")
-	console.log(await db.getNode(players[2]))
+	console.log(await db.getNode(players[2]))*/
 }
 
 main()

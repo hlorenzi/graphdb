@@ -9,6 +9,9 @@ class GraphDB
 	{
 		this.innerLock = new RWLock()
 		this.db = new level(folder)
+		
+		this.tables = {}
+		this.indexes = {}
 	}
 	
 	
@@ -35,9 +38,7 @@ class GraphDB
 				if (found)
 					continue
 				
-				const obj = { value, links: {} }
-				
-				await this.db.put(id, JSON.stringify(obj))
+				await this.db.put(id, JSON.stringify(value))
 				return id
 			}
 		}
@@ -52,21 +53,7 @@ class GraphDB
 		{
 			await this.innerLock.acquireWrite()
 			
-			let oldValue = null
-			try
-			{
-				oldValue = JSON.parse(await this.db.get(id))
-			}
-			catch (err)
-			{
-				if (err.notFound)
-					oldValue = { value: null, links: {} }
-				else
-					throw err
-			}
-			
-			const newValue = { value, links: oldValue.links }
-			await this.db.put(id, JSON.stringify(newValue))
+			await this.db.put(id, JSON.stringify(value))
 			return id
 		}
 		finally
@@ -80,8 +67,7 @@ class GraphDB
 		{
 			this.innerLock.acquireRead()
 			
-			const value = JSON.parse(await this.db.get(id))
-			return value.value
+			return JSON.parse(await this.db.get(id))
 		}
 		catch (err)
 		{
@@ -115,20 +101,82 @@ class GraphDB
 	}
 	
 	
+	async getLinksFrom(id, kind)
+	{
+		try
+		{
+			await this.innerLock.acquireRead()
+			return await this._getLinksFrom(id, kind)
+		}
+		finally
+			{ this.innerLock.releaseRead() }
+	}
+	
+	
+	async getLinksTo(id, kind)
+	{
+		try
+		{
+			await this.innerLock.acquireRead()
+			return await this._getLinksTo(id, kind)
+		}
+		finally
+			{ this.innerLock.releaseRead() }
+	}
+	
+	
+	async getLinkKindsFrom(id)
+	{
+		try
+		{
+			await this.innerLock.acquireRead()
+			return await this._getLinkKindsFrom(id)
+		}
+		finally
+			{ this.innerLock.releaseRead() }
+	}
+	
+	
 	async del(id)
 	{
 		try
 		{
 			await this.innerLock.acquireWrite()
 			
-			const oldValue = JSON.parse(await this.db.get(id))
+			const linkKinds = await this._getLinkKindsFrom(id)
 			
-			for (const key of Object.keys(oldValue.links))
+			for (const linkKind of linkKinds)
 			{
-				const inverseKey = (key[0] == "<" ? ">" : "<") + key.substr(1)
-				
-				for (const toId of oldValue.links[key])
-					await this._unlinkOneWay(toId, inverseKey, id)
+				for (const linkDir of [">", "<"])
+				{
+					let linksToDelete = []
+					
+					await this._enumerateKeys(linkDir + linkKind + "#" + id, (key, stop) =>
+					{
+						const parts = key.split("#")
+						if (parts[1] != id)
+						{
+							stop()
+							return
+						}
+						
+						linksToDelete.push(key)
+					})
+					
+					for (let linkToDelete of linksToDelete)
+					{
+						const linkId = await this.db.get(linkToDelete)
+						if (linkId != null && linkId != "")
+							await this.db.del(linkId)
+						
+						await this.db.del(linkToDelete)
+						
+						const parts = linkToDelete.split("#")
+						const inverseLinkToDelete = (linkDir == ">" ? "<" : ">") + parts[0].substr(1) + "#" + parts[2] + "#" + parts[1]
+						
+						await this.db.del(inverseLinkToDelete)
+					}
+				}
 			}
 			
 			await this.db.del(id)
@@ -138,14 +186,19 @@ class GraphDB
 	}
 	
 	
-	async link(fromId, kind, toId)
+	async link(fromId, kind, toId, linkData = null)
 	{
+		const linkId = (linkData != null ? await this.create(linkData) : null)
+		
 		try
 		{
 			await this.innerLock.acquireWrite()
-				
-			await this._linkOneWay(fromId, ">" + kind, toId)
-			await this._linkOneWay(toId,   "<" + kind, fromId)
+			await this.db.put(">" + kind + "#" + fromId + "#" + toId, linkId)
+			await this.db.put("<" + kind + "#" + toId + "#" + fromId, linkId)
+			await this.db.put(":" + fromId + "#" + kind, null)
+			await this.db.put(":" + toId + "#" + kind, null)
+			
+			return linkId
 		}
 		finally
 			{ this.innerLock.releaseWrite() }
@@ -157,53 +210,96 @@ class GraphDB
 		try
 		{
 			await this.innerLock.acquireWrite()
-				
-			await this._unlinkOneWay(fromId, ">" + kind, toId)
-			await this._unlinkOneWay(toId,   "<" + kind, fromId)
+			
+			const linkId = await this.db.get(">" + kind + "#" + fromId + "#" + toId)
+			if (linkId != null && linkId != "")
+				await this.db.del(linkId)
+			
+			await this.db.del(">" + kind + "#" + fromId + "#" + toId)
+			await this.db.del("<" + kind + "#" + toId + "#" + fromId)
 		}
 		finally
 			{ this.innerLock.releaseWrite() }
 	}
 	
 	
-	async _linkOneWay(fromId, kind, toId)
+	async _getLinkKindsFrom(id)
 	{
-		const oldValue = JSON.parse(await this.db.get(fromId))
+		let linkKinds = []
 		
-		let newArray = oldValue.links[kind] || []
-		if (newArray.find(id => id == toId) == null)
-			newArray.push(toId)
+		await this._enumerateKeys(":" + id, (key, stop) =>
+		{
+			const parts = key.split("#")
+			if (parts[0].substr(1) != id)
+			{
+				stop()
+				return
+			}
+			
+			linkKinds.push(parts[1])
+		})
 		
-		let newLinks = oldValue.links
-		newLinks[kind] = newArray
-		
-		const newValue = { value: oldValue.value, links: newLinks }
-		await this.db.put(fromId, JSON.stringify(newValue))
+		return linkKinds
 	}
 	
 	
-	async _unlinkOneWay(fromId, kind, toId)
+	async _getLinksFrom(id, kind)
 	{
-		const oldValue = JSON.parse(await this.db.get(fromId))
+		let links = []
 		
-		let newArray = oldValue.links[kind]
-		if (!newArray)
-			return
+		await this._enumerateKeys(">" + kind + "#" + id, (key, stop) =>
+		{
+			const parts = key.split("#")
+			if (parts[0].substr(1) != kind || parts[1] != id)
+			{
+				stop()
+				return
+			}
+			
+			links.push(parts[2])
+		})
 		
-		let index = newArray.findIndex(id => id == toId)
-		if (index < 0)
-			return
+		return links
+	}
+	
+	
+	async _getLinksTo(id, kind)
+	{
+		let links = []
 		
-		newArray.splice(index, 1)
+		await this._enumerateKeys("<" + kind + "#" + id, (key, stop) =>
+		{
+			const parts = key.split("#")
+			if (parts[0].substr(1) != kind || parts[1] != id)
+			{
+				stop()
+				return
+			}
+			
+			links.push(parts[2])
+		})
 		
-		let newLinks = oldValue.links
-		if (newArray.length > 0)
-			newLinks[kind] = newArray
-		else
-			delete newLinks[kind]
+		return links
+	}
+	
+	
+	async _enumerateKeys(fromKey, callback)
+	{
+		return new Promise((resolve, reject) =>
+		{
+			let keyStream = this.db.createKeyStream({ gte: fromKey })
 		
-		const newValue = { value: oldValue.value, links: newLinks }
-		await this.db.put(fromId, JSON.stringify(newValue))
+			let stop = () =>
+			{
+				resolve()
+				keyStream.destroy()
+			}
+			
+			keyStream.on("error", () => reject())
+			keyStream.on("close", () => reject())
+			keyStream.on("end", () => resolve())
+			keyStream.on("data", (key) => callback(key, stop))
+		})
 	}
 }
 
